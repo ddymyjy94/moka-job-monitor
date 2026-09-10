@@ -647,12 +647,7 @@ def main():
         return
     print(f"本次监控 {len(companies)} 家公司: {'、'.join(c['name'] for c in companies)}")
 
-    options = EdgeOptions()
-    options.use_chromium = True
-    options.binary_location = EDGE_BINARY_PATH
-    options.add_argument("--start-maximized")
-
-    driver = Edge(executable_path=DRIVER_PATH, options=options)
+    driver = create_driver()
     try:
         for company in companies:
             process_company(driver, company)
