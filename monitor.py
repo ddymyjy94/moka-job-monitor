@@ -57,7 +57,10 @@ def create_driver():
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--disable-blink-features=AutomationControlled")
         options.add_argument("--window-size=1920,1080")
-        return webdriver.Chrome(options=options)
+        options.page_load_strategy = "eager"
+        driver = webdriver.Chrome(options=options)
+        driver.set_page_load_timeout(90)
+        return driver
     options = EdgeOptions()
     options.use_chromium = True
     options.binary_location = EDGE_BINARY_PATH
