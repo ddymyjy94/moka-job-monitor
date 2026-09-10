@@ -1,0 +1,4 @@
+# 仅 GitHub Actions 云端使用；本地 Windows 已装好 selenium 3 + Edge 驱动，请勿在本机执行本文件
+selenium>=4.6
+requests
+python-dotenv
