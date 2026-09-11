@@ -315,6 +315,100 @@ def crawl_hotjob_jobs(company):
     return jobs_data
 
 
+def crawl_beisen_jobs(company):
+    """北森平台（zhiye.com）：纯 HTTP 调 GetJobAdPageList 接口，无需浏览器。
+
+    接口：POST {base}/api/Jobad/GetJobAdPageList
+    - PageIndex 从 0 开始；响应 Count 为总数，Data 为当页列表
+    - 必须带 DisplayFields 才回填 Category/Kind/LocNames（城市），否则全空
+    - 列表接口 PostDate 恒为 0001-01-01，真实发布日期用 ChangeDate（与页面
+      GetSpecialJobAdList 的 PostDate 逐条一致，2026-09-11 抽样验证）
+    - companies.json 里可用 "filters": {"ClassificationTwo": ["9"]} 传门户
+      侧的分类过滤（如鸣鸣很忙"总部招聘"），会合并进请求体
+    """
+    name = company["name"]
+    cities = company.get("cities", [])
+    base = company["url"].split("/jobs")[0].rstrip("/")
+    api = f"{base}/api/Jobad/GetJobAdPageList"
+    filters = company.get("filters") or {}
+    print(f"\n[{name}] 开始爬取岗位信息（北森接口，base: {base}，filters: {filters}）...")
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36",
+        "Content-Type": "application/json",
+        "Referer": company["url"],
+        "Origin": base,
+        "X-Requested-With": "XMLHttpRequest",
+    }
+
+    jobs_data = []
+    seen_ids = set()
+    total_count = None
+    page = 0
+    while page < 30:
+        body = {
+            "PageIndex": page,
+            "PageSize": 50,
+            "KeyWords": "",
+            "SpecialType": 0,
+            "PortalId": "",
+            "DisplayFields": ["Category", "Kind", "LocId", "WorkWeChatQrCode"],
+        }
+        body.update(filters)
+        try:
+            resp = requests.post(api, data=json.dumps(body), headers=headers, timeout=30)
+            result = resp.json()
+        except Exception as e:
+            print(f"[{name}] GetJobAdPageList 请求失败(第{page}页): {e}")
+            break
+        if result.get("Code") != 200:
+            print(f"[{name}] GetJobAdPageList 接口异常: {result.get('Message')}")
+            break
+        total_count = result.get("Count")
+        data = result.get("Data") or []
+        if not data:
+            break
+        print(f"[{name}] 第 {page + 1} 页，{len(data)} 个岗位（总数 {total_count}）")
+        for it in data:
+            if it.get("Id") in seen_ids:
+                continue
+            seen_ids.add(it.get("Id"))
+            date_text = (it.get("ChangeDate") or "")[:10]
+            try:
+                job_date = datetime.strptime(date_text, "%Y-%m-%d")
+            except ValueError:
+                continue
+            if not is_within_one_month(job_date):
+                continue
+            duty = (it.get("Duty") or "").strip()
+            require = (it.get("Require") or "").strip()
+            desc = duty[:600]
+            if require:
+                desc = (desc + "\n【任职要求】" + require[:400]).strip()
+            tags = "；".join([x for x in (it.get("Category"), it.get("Kind")) if x])
+            if tags:
+                desc = f"[{tags}] " + desc
+            jobs_data.append({
+                "岗位名称": it.get("JobAdName", ""),
+                "发布日期": date_text,
+                "城市": "、".join(it.get("LocNames") or []),
+                "部门": "",
+                "岗位描述": desc,
+            })
+        if total_count and len(seen_ids) >= total_count:
+            break
+        page += 1
+        time.sleep(1)
+
+    print(f"[{name}] 接口共爬得 {len(jobs_data)} 个近一个月岗位（过滤城市前）")
+
+    # 城市安全过滤兜底：LocNames 形如"湖南省·长沙市"，含监控城市才保留
+    if cities and jobs_data:
+        jobs_data = [j for j in jobs_data if any(c == j["城市"] or c in j["城市"] for c in cities)]
+        print(f"[{name}] 城市过滤后剩余 {len(jobs_data)} 个岗位")
+    return jobs_data
+
+
 # ---------------- 快照与新增对比 ----------------
 
 def load_previous_jobs(company_dir):
@@ -715,6 +809,11 @@ def process_company(driver, company):
             if not jobs_data:
                 print(f"[{name}] 无近一个月内发布的岗位，跳过飞书同步")
                 return
+        elif platform == "beisen":
+            jobs_data = crawl_beisen_jobs(company)
+            if not jobs_data:
+                print(f"[{name}] 无近一个月内发布的岗位，跳过飞书同步")
+                return
         else:
             jobs_data = crawl_moka_jobs(driver, company)
             if jobs_data is None:
@@ -739,8 +838,8 @@ def main():
         return
     print(f"本次监控 {len(companies)} 家公司: {'、'.join(c['name'] for c in companies)}")
 
-    # 仅 Moka 公司需要浏览器；全走接口（hotjob 等）时不启动
-    moka_companies = [c for c in companies if c.get("platform", "moka") != "hotjob"]
+    # 仅 Moka 公司需要浏览器；全走接口（hotjob/beisen 等）时不启动
+    moka_companies = [c for c in companies if c.get("platform", "moka") not in ("hotjob", "beisen")]
     driver = create_driver() if moka_companies else None
     if driver is None:
         print("所有公司均为接口爬取，无需启动浏览器")

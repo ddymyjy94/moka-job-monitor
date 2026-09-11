@@ -23,6 +23,15 @@
       "url": "https://wecruit.hotjob.cn/SU66f3c75a6202cc1a0cba3202/mc/position/society",
       "cities": ["长沙市"],
       "enabled": true
+    },
+    {
+      "id": "mmhm",
+      "name": "鸣鸣很忙",
+      "platform": "beisen",
+      "url": "https://hnlshm4.zhiye.com/jobs",
+      "cities": ["长沙市"],
+      "filters": { "ClassificationTwo": ["9"] },
+      "enabled": true
     }
   ]
 }
