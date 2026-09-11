@@ -3,6 +3,7 @@
     {
       "id": "schneider",
       "name": "施耐德电气",
+      "platform": "moka",
       "url": "https://app.mokahr.com/social-recruitment/se/98712?sessionid=#/jobs",
       "cities": ["广州市", "武汉市"],
       "enabled": true
@@ -10,7 +11,16 @@
     {
       "id": "bosch",
       "name": "博世",
+      "platform": "moka",
       "url": "https://app.mokahr.com/campus-recruitment/bosch/150946?sessionid=#/jobs",
+      "cities": ["长沙市"],
+      "enabled": true
+    },
+    {
+      "id": "ausnutria",
+      "name": "澳优乳业",
+      "platform": "hotjob",
+      "url": "https://wecruit.hotjob.cn/SU66f3c75a6202cc1a0cba3202/mc/position/society",
       "cities": ["长沙市"],
       "enabled": true
     }

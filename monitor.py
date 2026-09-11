@@ -244,6 +244,77 @@ def crawl_jobs(driver, company):
     return jobs_data
 
 
+def crawl_hotjob_jobs(company):
+    """大易平台（hotjob.cn）：纯 HTTP 调 listPosition 接口，无需浏览器。
+
+    接口：POST {base}/wecruit/positionInfo/listPosition/{siteCode}?recruitType=2
+    recruitType 必须放在 query/form（2=社招），放 JSON body 里后端读不到。
+    """
+    name = company["name"]
+    cities = company.get("cities", [])
+    m = re.search(r"/(SU[0-9a-f]+)/", company["url"])
+    if not m:
+        print(f"[{name}] URL 中未找到 siteCode（SU 开头段），跳过")
+        return []
+    site = m.group(1)
+    base = company["url"].split(f"/{site}")[0]
+    api = f"{base}/wecruit/positionInfo/listPosition/{site}"
+    print(f"\n[{name}] 开始爬取岗位信息（大易接口，siteCode: {site}）...")
+
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36",
+               "Referer": company["url"]}
+    jobs_data = []
+    page, total_pages = 1, 1
+    while page <= max(total_pages, 1) and page <= 30:
+        try:
+            resp = requests.post(api, params={"recruitType": 2},
+                                 data={"currentPage": page, "pageSize": 20},
+                                 headers=headers, timeout=30)
+            result = resp.json()
+        except Exception as e:
+            print(f"[{name}] listPosition 请求失败(第{page}页): {e}")
+            break
+        if result.get("state") != "200":
+            print(f"[{name}] listPosition 接口异常: {result.get('msg')}")
+            break
+        pf = (result.get("data") or {}).get("pageForm") or {}
+        total_pages = pf.get("totalPage") or 1
+        data = pf.get("pageData") or []
+        if not data:
+            break
+        print(f"[{name}] 第 {page}/{total_pages} 页，{len(data)} 个岗位")
+        for it in data:
+            date_text = (it.get("publishDate") or "")[:10]
+            try:
+                job_date = datetime.strptime(date_text, "%Y-%m-%d")
+            except ValueError:
+                continue
+            if not is_within_one_month(job_date):
+                continue
+            desc = "；".join([x for x in (
+                it.get("postTypeName"), it.get("educationStr"), it.get("workYears"),
+                it.get("projectName"),
+                f"岗位编码 {it['postCode']}" if it.get("postCode") else "",
+            ) if x])
+            jobs_data.append({
+                "岗位名称": it.get("postName", ""),
+                "发布日期": date_text,
+                "城市": it.get("workPlaceStr", ""),
+                "部门": it.get("company", ""),
+                "岗位描述": desc
+            })
+        page += 1
+        time.sleep(1)
+
+    print(f"[{name}] 接口共爬得 {len(jobs_data)} 个近一个月岗位（过滤城市前）")
+
+    # 城市安全过滤兜底：workPlaceStr 含监控城市才保留（如"长沙市-望城区"含"长沙市"）
+    if cities and jobs_data:
+        jobs_data = [j for j in jobs_data if any(c == j["城市"] or c in j["城市"] for c in cities)]
+        print(f"[{name}] 城市过滤后剩余 {len(jobs_data)} 个岗位")
+    return jobs_data
+
+
 # ---------------- 快照与新增对比 ----------------
 
 def load_previous_jobs(company_dir):
@@ -568,68 +639,86 @@ def analyze_and_push(jobs_data, new_jobs, company):
     return send_feishu_message(message)
 
 
+def crawl_moka_jobs(driver, company):
+    """Moka 平台：浏览器打开页面 + 城市筛选 + 爬取。返回岗位列表，需跳过时返回 None。"""
+    name = company["name"]
+    cities = company.get("cities", [])
+
+    url = build_url(company["url"], cities)
+    print(f"打开网页: {url}")
+    driver.get(url)
+    time.sleep(3)
+
+    state = wait_for_job_list(driver)
+    if state == "empty":
+        print(f"[{name}] 当前无匹配岗位，跳过飞书同步")
+        return None
+
+    if state == "timeout":
+        print(f"[{name}] 页面加载超时，尝试继续处理...")
+
+    # 方案一：URL location 参数（博世校招等页面支持），用"已选 N 条件"指示确认
+    filter_ok = not cities or _filter_confirmed(driver, cities, timeout=8)
+
+    # 方案二：部分页面忽略 URL 参数且带参数时点选也失效（如施耐德社招），
+    # 必须用干净 URL 重新加载后再点选城市复选框
+    if cities and not filter_ok:
+        clean_url = build_url(company["url"], [])
+        print(f"URL 城市过滤未生效，改用干净 URL 重新加载后点选: {clean_url}")
+        driver.get(clean_url)
+        time.sleep(3)
+        state = wait_for_job_list(driver)
+        if state == "empty":
+            print(f"[{name}] 当前无匹配岗位，跳过飞书同步")
+            return None
+        try:
+            WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.XPATH, "//*[contains(text(), '工作地点')]"))
+            )
+        except Exception:
+            pass
+        for city in cities:
+            _click_city(driver, city)
+            time.sleep(1)
+        if not _filter_confirmed(driver, cities, timeout=10):
+            print("警告：未能确认城市筛选状态，将依赖安全过滤兜底")
+
+    time.sleep(2)
+    jobs_data = crawl_jobs(driver, company)
+
+    # 安全过滤：即使页面过滤失效，也只保留监控城市范围内的岗位
+    if cities and jobs_data:
+        filtered = [j for j in jobs_data if any(c == j.get("城市") or c in (j.get("城市") or "") for c in cities)]
+        dropped = len(jobs_data) - len(filtered)
+        if dropped:
+            print(f"[{name}] 安全过滤：剔除 {dropped} 个不在监控城市范围内的岗位")
+        jobs_data = filtered
+
+    if not jobs_data:
+        print(f"[{name}] 无近一个月内发布的岗位，跳过飞书同步")
+        return None
+    return jobs_data
+
+
 def process_company(driver, company):
     cid = company["id"]
     name = company["name"]
     cities = company.get("cities", [])
     company_dir = os.path.join(OUTPUT_DIR, cid)
 
-    print(f"\n{'='*60}\n开始处理: {name}（城市: {'、'.join(cities) if cities else '不限'}）\n{'='*60}")
+    platform = company.get("platform", "moka")
+    print(f"\n{'='*60}\n开始处理: {name}（平台: {platform}，城市: {'、'.join(cities) if cities else '不限'}）\n{'='*60}")
 
     try:
-        url = build_url(company["url"], cities)
-        print(f"打开网页: {url}")
-        driver.get(url)
-        time.sleep(3)
-
-        state = wait_for_job_list(driver)
-        if state == "empty":
-            print(f"[{name}] 当前无匹配岗位，跳过飞书同步")
-            return
-
-        if state == "timeout":
-            print(f"[{name}] 页面加载超时，尝试继续处理...")
-
-        # 方案一：URL location 参数（博世校招等页面支持），用"已选 N 条件"指示确认
-        filter_ok = not cities or _filter_confirmed(driver, cities, timeout=8)
-
-        # 方案二：部分页面忽略 URL 参数且带参数时点选也失效（如施耐德社招），
-        # 必须用干净 URL 重新加载后再点选城市复选框
-        if cities and not filter_ok:
-            clean_url = build_url(company["url"], [])
-            print(f"URL 城市过滤未生效，改用干净 URL 重新加载后点选: {clean_url}")
-            driver.get(clean_url)
-            time.sleep(3)
-            state = wait_for_job_list(driver)
-            if state == "empty":
-                print(f"[{name}] 当前无匹配岗位，跳过飞书同步")
+        if platform == "hotjob":
+            jobs_data = crawl_hotjob_jobs(company)
+            if not jobs_data:
+                print(f"[{name}] 无近一个月内发布的岗位，跳过飞书同步")
                 return
-            try:
-                WebDriverWait(driver, 10).until(
-                    EC.presence_of_element_located((By.XPATH, "//*[contains(text(), '工作地点')]"))
-                )
-            except Exception:
-                pass
-            for city in cities:
-                _click_city(driver, city)
-                time.sleep(1)
-            if not _filter_confirmed(driver, cities, timeout=10):
-                print("警告：未能确认城市筛选状态，将依赖安全过滤兜底")
-
-        time.sleep(2)
-        jobs_data = crawl_jobs(driver, company)
-
-        # 安全过滤：即使页面过滤失效，也只保留监控城市范围内的岗位
-        if cities and jobs_data:
-            filtered = [j for j in jobs_data if any(c == j.get("城市") or c in (j.get("城市") or "") for c in cities)]
-            dropped = len(jobs_data) - len(filtered)
-            if dropped:
-                print(f"[{name}] 安全过滤：剔除 {dropped} 个不在监控城市范围内的岗位")
-            jobs_data = filtered
-
-        if not jobs_data:
-            print(f"[{name}] 无近一个月内发布的岗位，跳过飞书同步")
-            return
+        else:
+            jobs_data = crawl_moka_jobs(driver, company)
+            if jobs_data is None:
+                return
 
         previous_jobs = load_previous_jobs(company_dir)
         new_jobs = diff_new_jobs(jobs_data, previous_jobs)
@@ -650,16 +739,21 @@ def main():
         return
     print(f"本次监控 {len(companies)} 家公司: {'、'.join(c['name'] for c in companies)}")
 
-    driver = create_driver()
+    # 仅 Moka 公司需要浏览器；全走接口（hotjob 等）时不启动
+    moka_companies = [c for c in companies if c.get("platform", "moka") != "hotjob"]
+    driver = create_driver() if moka_companies else None
+    if driver is None:
+        print("所有公司均为接口爬取，无需启动浏览器")
     try:
         for company in companies:
             process_company(driver, company)
     finally:
-        try:
-            driver.quit()
-        except Exception:
-            pass
-        print("\n浏览器已关闭")
+        if driver is not None:
+            try:
+                driver.quit()
+            except Exception:
+                pass
+            print("\n浏览器已关闭")
 
 
 if __name__ == "__main__":
