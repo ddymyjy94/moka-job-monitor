@@ -33,7 +33,7 @@
 
 | 字段 | 说明 |
 |---|---|
-| `platform` | `moka`（默认，浏览器爬取）/ `hotjob`（大易接口，URL 含 SU 段 siteCode）/ `beisen`（北森接口，URL 取 `/jobs` 前的域名） |
+| `platform` | `moka`（默认，浏览器爬取）/ `hotjob`（大易接口，URL 含 SU 段 siteCode）/ `beisen`（北森接口，取 URL 域名根调接口） |
 | `url` | 招聘页链接，各平台爬取器自动从中提取所需参数 |
 | `cities` | 监控城市列表，爬取后做安全过滤兜底（岗位城市含任一城市才保留） |
 | `filters`（仅 beisen） | 直接合并进北森接口请求体，如 `{"ClassificationTwo": ["9"]}` 只看"总部招聘"分类 |

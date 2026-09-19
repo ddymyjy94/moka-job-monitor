@@ -32,6 +32,14 @@
       "cities": ["长沙市"],
       "filters": { "ClassificationTwo": ["9"] },
       "enabled": true
+    },
+    {
+      "id": "irootech",
+      "name": "树根互联",
+      "platform": "beisen",
+      "url": "https://irootech.zhiye.com/social/jobs",
+      "cities": ["长沙市", "广州市", "北京市"],
+      "enabled": true
     }
   ]
 }

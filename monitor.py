@@ -15,7 +15,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.by import By
 from datetime import datetime, timedelta
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 import re
 import time
 import json
@@ -328,7 +328,8 @@ def crawl_beisen_jobs(company):
     """
     name = company["name"]
     cities = company.get("cities", [])
-    base = company["url"].split("/jobs")[0].rstrip("/")
+    p = urlparse(company["url"])
+    base = f"{p.scheme}://{p.netloc}"
     api = f"{base}/api/Jobad/GetJobAdPageList"
     filters = company.get("filters") or {}
     print(f"\n[{name}] 开始爬取岗位信息（北森接口，base: {base}，filters: {filters}）...")
