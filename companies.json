@@ -6,7 +6,7 @@
       "platform": "moka",
       "url": "https://app.mokahr.com/social-recruitment/se/98712?sessionid=#/jobs",
       "cities": ["广州市", "武汉市"],
-      "priority": 6,
+      "priority": 7,
       "enabled": true
     },
     {
@@ -15,7 +15,7 @@
       "platform": "moka",
       "url": "https://app.mokahr.com/campus-recruitment/bosch/150946?sessionid=#/jobs",
       "cities": ["长沙市"],
-      "priority": 5,
+      "priority": 6,
       "enabled": true
     },
     {
@@ -55,6 +55,16 @@
       "cities": ["长沙市"],
       "priority": 3,
       "filters": { "Category": "1" },
+      "enabled": true
+    },
+    {
+      "id": "zkg",
+      "name": "中科云谷",
+      "platform": "hotjob",
+      "url": "https://wecruit.hotjob.cn/SU60a6449a2f9d2430fdc11a19/pb/social.html?orgCode=0%2F29",
+      "cities": ["长沙市"],
+      "priority": 5,
+      "filters": { "company": "云谷" },
       "enabled": true
     }
   ]

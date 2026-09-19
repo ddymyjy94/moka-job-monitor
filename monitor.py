@@ -262,15 +262,18 @@ def crawl_hotjob_jobs(company):
     site = m.group(1)
     base = company["url"].split(f"/{site}")[0]
     api = f"{base}/wecruit/positionInfo/listPosition/{site}"
+    # filters.company：集团共享门户时按子公司名过滤（如中联重科门户里的"中科云谷"）
+    company_kw = ((company.get("filters") or {}).get("company") or "").strip()
     print(f"\n[{name}] 开始爬取岗位信息（大易接口，siteCode: {site}）...")
 
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36",
                "Referer": company["url"]}
     jobs_data = []
     page, total_pages = 1, 1
-    while page <= max(total_pages, 1) and page <= 30:
+    while page <= max(total_pages, 1) and page <= 50:
         try:
-            resp = requests.post(api, params={"recruitType": 2},
+            # pb 门户只认 query 分页参数，mc 门户只认 form；两边都带以兼容
+            resp = requests.post(api, params={"recruitType": 2, "currentPage": page, "pageSize": 20},
                                  data={"currentPage": page, "pageSize": 20},
                                  headers=headers, timeout=30)
             result = resp.json()
@@ -287,6 +290,8 @@ def crawl_hotjob_jobs(company):
             break
         print(f"[{name}] 第 {page}/{total_pages} 页，{len(data)} 个岗位")
         for it in data:
+            if company_kw and company_kw not in (it.get("company") or ""):
+                continue
             date_text = (it.get("publishDate") or "")[:10]
             try:
                 job_date = datetime.strptime(date_text, "%Y-%m-%d")
