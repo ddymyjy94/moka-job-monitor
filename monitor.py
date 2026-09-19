@@ -2,8 +2,9 @@
 """Moka 多公司招聘岗位监控：配置驱动，支持任意多家 Moka 公司页面。
 
 用法：编辑 companies.json 增删公司即可，无需改代码。
-流程：逐公司打开岗位列表页 -> 爬取近一个月岗位 -> 存快照 -> 与上次快照对比得出新增
-      -> 写飞书表格（每公司两个标签页）-> AI 分析 -> 飞书消息推送（全量分析+新增提醒）
+流程：逐公司爬取近一个月岗位 -> 存快照 -> 与上次快照对比得出新增 -> 写飞书表格
+      -> 周一：AI 分析 + 全量周报（每公司一条消息，全量岗位+新增提醒）
+      -> 周二至周日：简易日报（单条消息，只列有新增岗位的公司；全无新增时一句话）
 
 运行环境：
 - 本机（Windows + Edge）：直接 python monitor.py 或 运行 启动招聘网页.bat
@@ -742,6 +743,38 @@ def analyze_and_push(jobs_data, new_jobs, company):
     return send_feishu_message(message)
 
 
+def update_jobs_sheet_only(jobs_data, company):
+    """非周一运行：只静默更新 {公司名}-岗位 标签页，不跑 AI、不发消息。"""
+    if not FEISHU_SPREADSHEET_TOKEN:
+        print("请先配置飞书凭证（FEISHU_SPREADSHEET_TOKEN）")
+        return False
+    token = get_tenant_token()
+    if not token:
+        return False
+    sheet_id = get_or_create_sheet(token, FEISHU_SPREADSHEET_TOKEN, f"{company['name']}-岗位")
+    if not sheet_id:
+        return False
+    return write_jobs_to_sheet(token, FEISHU_SPREADSHEET_TOKEN, sheet_id, jobs_data)
+
+
+def send_daily_digest(results):
+    """简易日报：单条消息，按优先级只列有新增岗位的公司；全无新增时一句话收尾。"""
+    date_str = datetime.now().strftime("%m-%d")
+    segments = []
+    for r in results:
+        new_jobs = r["new_jobs"]
+        if not new_jobs:
+            continue
+        job_list = "\n".join([f"· {j['岗位名称']}（{j['发布日期']}，{j['城市']}）" for j in new_jobs])
+        segments.append(f"【{r['name']}】新增 {len(new_jobs)} 个岗位\n{job_list}")
+    if segments:
+        message = f"📊 岗位日报 · {date_str}\n\n" + "\n\n".join(segments)
+    else:
+        message = f"📊 岗位日报 · {date_str}\n今日 {len(results)} 家公司均无新增岗位。"
+    print(message)
+    return send_feishu_message(message)
+
+
 def crawl_moka_jobs(driver, company):
     """Moka 平台：浏览器打开页面 + 城市筛选 + 爬取。返回岗位列表，需跳过时返回 None。"""
     name = company["name"]
@@ -803,7 +836,7 @@ def crawl_moka_jobs(driver, company):
     return jobs_data
 
 
-def process_company(driver, company):
+def process_company(driver, company, is_monday):
     cid = company["id"]
     name = company["name"]
     cities = company.get("cities", [])
@@ -817,26 +850,31 @@ def process_company(driver, company):
             jobs_data = crawl_hotjob_jobs(company)
             if not jobs_data:
                 print(f"[{name}] 无近一个月内发布的岗位，跳过飞书同步")
-                return
+                return {"name": name, "new_jobs": []}
         elif platform == "beisen":
             jobs_data = crawl_beisen_jobs(company)
             if not jobs_data:
                 print(f"[{name}] 无近一个月内发布的岗位，跳过飞书同步")
-                return
+                return {"name": name, "new_jobs": []}
         else:
             jobs_data = crawl_moka_jobs(driver, company)
             if jobs_data is None:
-                return
+                return {"name": name, "new_jobs": []}
 
         previous_jobs = load_previous_jobs(company_dir)
         new_jobs = diff_new_jobs(jobs_data, previous_jobs)
         print(f"\n[{name}] 共 {len(jobs_data)} 个岗位，本次新增 {len(new_jobs)} 个")
 
         save_to_json(jobs_data, company_dir)
-        analyze_and_push(jobs_data, new_jobs, company)
+        if is_monday:
+            analyze_and_push(jobs_data, new_jobs, company)
+        else:
+            update_jobs_sheet_only(jobs_data, company)
+        return {"name": name, "new_jobs": new_jobs}
 
     except Exception as e:
         print(f"[{name}] 处理出错: {e}")
+        return None
 
 
 # ---------------- 主流程 ----------------
@@ -847,14 +885,23 @@ def main():
         return
     print(f"本次监控 {len(companies)} 家公司: {'、'.join(c['name'] for c in companies)}")
 
+    # 周一推全量周报（AI 分析+每公司一条）；周二至周日推简易日报（仅新增岗位，不调 AI）
+    is_monday = datetime.now().weekday() == 0
+    print("今天是周一，推送全量周报" if is_monday else "非周一，推送简易日报（仅新增岗位）")
+
     # 仅 Moka 公司需要浏览器；全走接口（hotjob/beisen 等）时不启动
     moka_companies = [c for c in companies if c.get("platform", "moka") not in ("hotjob", "beisen")]
     driver = create_driver() if moka_companies else None
     if driver is None:
         print("所有公司均为接口爬取，无需启动浏览器")
     try:
+        results = []
         for company in companies:
-            process_company(driver, company)
+            r = process_company(driver, company, is_monday)
+            if r:
+                results.append(r)
+        if not is_monday and results:
+            send_daily_digest(results)
     finally:
         if driver is not None:
             try:
