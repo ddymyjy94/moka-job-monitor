@@ -2,8 +2,12 @@
 """Moka 多公司招聘岗位监控：配置驱动，支持任意多家 Moka 公司页面。
 
 用法：编辑 companies.json 增删公司即可，无需改代码。
-流程：逐公司打开岗位列表页 -> 爬取近一个月岗位 -> 存快照 -> 与上次快照对比得出新增
-      -> 写飞书表格（每公司两个标签页）-> AI 分析 -> 飞书消息推送（全量分析+新增提醒）
+流程（每天）：
+  逐公司爬取近一月岗位（按 platform 分发）-> 存快照 -> 与上次快照 diff 得新增
+  -> 岗位表静默写入飞书（按发布日期倒序，数据层，不依赖用户查看）
+  -> 汇总发送一条「岗位速报」（方案A合并单条：今日新增 + 近7天岗位自然混列）
+流程（每周一额外）：
+  每公司调用 AI 生成周报 -> 覆盖写入 {公司名}-分析 标签页 -> 合并发送「每周速览」
 
 运行环境：
 - 本机（Windows + Edge）：直接 python monitor.py 或 运行 启动招聘网页.bat
@@ -535,7 +539,8 @@ def write_jobs_to_sheet(token, spreadsheet_token, sheet_id, jobs_data):
     clear_sheet_area(token, spreadsheet_token, sheet_id, cols=5)
     ok = put_values(token, spreadsheet_token, sheet_id, "A1:E1",
                     [["岗位名称", "发布日期", "城市", "部门", "岗位描述"]])
-    rows = [[j["岗位名称"], j["发布日期"], j["城市"], j["部门"], j["岗位描述"]] for j in jobs_data]
+    rows = [[j["岗位名称"], j["发布日期"], j["城市"], j["部门"], j["岗位描述"]]
+            for j in sorted(jobs_data, key=lambda x: x.get("发布日期", ""), reverse=True)]
     if rows:
         ok = put_values(token, spreadsheet_token, sheet_id, f"A2:E{len(rows) + 1}", rows) and ok
     if ok:
@@ -568,7 +573,7 @@ def write_analysis_to_sheet(token, spreadsheet_token, sheet_id, ai_result):
 
 # ---------------- AI 分析与消息推送 ----------------
 
-def ai_analyze(jobs_text, stats_info, company):
+def ai_analyze(jobs_text, stats_info, company, weekly=False):
     if not AI_API_KEY:
         print("请先配置AI_API_KEY")
         return None
@@ -577,8 +582,10 @@ def ai_analyze(jobs_text, stats_info, company):
     cities = company.get("cities", [])
     city_questions = "\n".join([f"{c}：主要是什么类型的部门？承担什么角色？" for c in cities])
     city_summary_hint = "，".join([f"{c}X岗" for c in cities]) if cities else "各城市X岗"
+    weekly_note = "本次分析为每周一发布的「每周速览」，请以近7天的变化和趋势为重点。" if weekly else ""
 
     prompt = f"""你是一个招聘数据分析专家。请对以下{name}招聘岗位数据进行分析。
+{weekly_note}
 
 {stats_info}
 以上统计数据由程序精确计算，必须直接引用，禁止自行计数。
@@ -595,7 +602,7 @@ def ai_analyze(jobs_text, stats_info, company):
 每行格式为：分析项|内容|备注|结论
 
 【推送概述】100字以内：
-1. 第一句引用统计数据，格式如"{name}近一个月新发布X个岗位"
+1. 第一句引用统计数据，格式如"{name}在招X个岗位，近7天新增Y个"
 2. 城市分布用精炼格式，如"{city_summary_hint}"（引用统计数据）
 3. 概括重点城市的岗位用人需求特点
 
@@ -674,29 +681,20 @@ def send_feishu_message(text):
         return False
 
 
-# ---------------- 单公司完整流程 ----------------
+# ---------------- 消息组装 ----------------
 
-def analyze_and_push(jobs_data, new_jobs, company):
-    name = company["name"]
+def _short_city(city):
+    """去掉北森 LocNames 的省份前缀，便于消息展示：湖南省·长沙市 -> 长沙市。"""
+    return re.sub(r"[\u4e00-\u9fa5]{2,8}省·", "", city or "")
 
-    if not FEISHU_SPREADSHEET_TOKEN:
-        print("请先配置飞书凭证（FEISHU_SPREADSHEET_TOKEN）")
-        return False
 
-    token = get_tenant_token()
-    if not token:
-        return False
+def _city_summary(city_count):
+    return "，".join([f"{c}{n}岗" for c, n in city_count.items()])
 
-    # 1. 全量岗位写入 {公司名}-岗位 标签页
-    jobs_sheet_id = get_or_create_sheet(token, FEISHU_SPREADSHEET_TOKEN, f"{name}-岗位")
-    if jobs_sheet_id:
-        write_jobs_to_sheet(token, FEISHU_SPREADSHEET_TOKEN, jobs_sheet_id, jobs_data)
 
-    # 2. 统计信息（本地数据直接计算）
+def count_cities(jobs_data):
     city_count = {}
-    jobs_text = ""
     for job in jobs_data:
-        jobs_text += f"岗位: {job['岗位名称']}, 日期: {job['发布日期']}, 城市: {job['城市']}, 部门: {job['部门']}, 描述: {job['岗位描述']}\n"
         city = job.get("城市", "")
         if not city:
             continue
@@ -708,36 +706,66 @@ def analyze_and_push(jobs_data, new_jobs, company):
                 break
         if not matched:
             city_count[city] = city_count.get(city, 0) + 1
+    return city_count
 
-    city_summary = "，".join([f"{c}{n}岗" for c, n in city_count.items()])
-    new_summary = f"，本次新增{len(new_jobs)}个岗位" if new_jobs else "，本次无新增岗位"
-    stats_info = f"统计信息：近一个月共{len(jobs_data)}个岗位（{city_summary}）{new_summary}"
 
-    # 3. AI 分析 -> {公司名}-分析 标签页
-    push_summary = ""
-    ai_result = ai_analyze(jobs_text, stats_info, company)
-    if ai_result:
-        structured = ai_result
+def jobs_text_of(jobs_data):
+    return "".join(
+        f"岗位: {j['岗位名称']}, 日期: {j['发布日期']}, 城市: {j['城市']}, 部门: {j['部门']}, 描述: {j['岗位描述']}\n"
+        for j in jobs_data
+    )
+
+
+def build_daily_report(results, run_date):
+    """方案A合并单条：今日新增 + 近7天岗位自然混列（无 NEW 标记、无分区标题）。"""
+    lines = [f"📊 岗位速报 · {run_date.strftime('%m-%d')}", ""]
+    for company, jobs, new_jobs in results:
+        name = company["name"]
+        if jobs is None:
+            lines.append(f"· {name}：今日无数据")
+            lines.append("")
+            continue
+        if new_jobs:
+            lines.append(f"🔥 {name} · 新增 {len(new_jobs)} 岗")
+        else:
+            lines.append(f"· {name}：无新增（在招 {len(jobs)} 岗）")
+        cutoff = (run_date - timedelta(days=7)).strftime("%Y-%m-%d")
+        recent = sorted((j for j in jobs if j.get("发布日期", "") >= cutoff),
+                        key=lambda x: x.get("发布日期", ""), reverse=True)
+        for j in recent:
+            lines.append(f"· {j['岗位名称']} {j['发布日期'][5:]} {_short_city(j['城市'])}")
+        lines.append("")
+    return "\n".join(lines).strip()
+
+
+def run_weekly_analysis(results, token, run_date):
+    """每周一执行：逐公司 AI 周报 -> 覆盖写入 {公司名}-分析 标签页 -> 合并周报消息。"""
+    weekly_parts = [f"📈 每周速览 · {run_date.strftime('%m-%d')}", ""]
+    for company, jobs, new_jobs in results:
+        if not jobs:
+            continue
+        name = company["name"]
+        cutoff7 = (run_date - timedelta(days=7)).strftime("%Y-%m-%d")
+        new7 = [j for j in jobs if j.get("发布日期", "") >= cutoff7]
+        city_summary = _city_summary(count_cities(jobs))
+        stats_info = (f"统计信息：近一个月在招{len(jobs)}个岗位（{city_summary}），"
+                      f"其中近7天发布{len(new7)}个，与上周快照对比本次新增{len(new_jobs or [])}个")
+        print(f"\n[{name}] 生成每周速览...")
+        ai_result = ai_analyze(jobs_text_of(jobs), stats_info, company, weekly=True)
+        if not ai_result:
+            print(f"[{name}] AI 分析失败，周报跳过该公司")
+            continue
+        push_summary = ai_result
         if "【推送概述】" in ai_result:
             parts = ai_result.split("【推送概述】")
             structured = parts[0].replace("【结构化分析】", "").strip()
             push_summary = parts[1].strip()
-        analysis_sheet_id = get_or_create_sheet(token, FEISHU_SPREADSHEET_TOKEN, f"{name}-分析")
-        if analysis_sheet_id:
-            write_analysis_to_sheet(token, FEISHU_SPREADSHEET_TOKEN, analysis_sheet_id, structured)
-    else:
-        print("AI分析失败，仅推送基础岗位信息")
-
-    # 4. 消息推送：全量分析 + 新增提醒
-    message = f"📊 {name}岗位监控"
-    if push_summary:
-        message += f"\n{push_summary}"
-    if new_jobs:
-        new_list = "\n".join([f"🆕 {j['岗位名称']}（{j['发布日期']}，{j['城市']}）" for j in new_jobs])
-        message += f"\n\n【本次新增 {len(new_jobs)} 个岗位】\n{new_list}"
-    job_list = "\n".join([f"· {j['岗位名称']}（{j['发布日期']}，{j['城市']}）" for j in jobs_data])
-    message += f"\n\n【全部岗位列表】\n{job_list}"
-    return send_feishu_message(message)
+            analysis_sheet_id = get_or_create_sheet(token, FEISHU_SPREADSHEET_TOKEN, f"{name}-分析")
+            if analysis_sheet_id:
+                write_analysis_to_sheet(token, FEISHU_SPREADSHEET_TOKEN, analysis_sheet_id, structured)
+        weekly_parts.append(f"【{name}】{push_summary}")
+        weekly_parts.append("")
+    return "\n".join(weekly_parts).strip() if len(weekly_parts) > 2 else ""
 
 
 def crawl_moka_jobs(driver, company):
@@ -802,6 +830,7 @@ def crawl_moka_jobs(driver, company):
 
 
 def process_company(driver, company):
+    """爬取 -> 快照 -> diff -> 岗位表静默写入。返回 (jobs_data, new_jobs)；无岗位/出错返回 None。"""
     cid = company["id"]
     name = company["name"]
     cities = company.get("cities", [])
@@ -814,27 +843,37 @@ def process_company(driver, company):
         if platform == "hotjob":
             jobs_data = crawl_hotjob_jobs(company)
             if not jobs_data:
-                print(f"[{name}] 无近一个月内发布的岗位，跳过飞书同步")
-                return
+                print(f"[{name}] 无近一个月内发布的岗位")
+                return None
         elif platform == "beisen":
             jobs_data = crawl_beisen_jobs(company)
             if not jobs_data:
-                print(f"[{name}] 无近一个月内发布的岗位，跳过飞书同步")
-                return
+                print(f"[{name}] 无近一个月内发布的岗位")
+                return None
         else:
             jobs_data = crawl_moka_jobs(driver, company)
             if jobs_data is None:
-                return
+                return None
 
         previous_jobs = load_previous_jobs(company_dir)
         new_jobs = diff_new_jobs(jobs_data, previous_jobs)
         print(f"\n[{name}] 共 {len(jobs_data)} 个岗位，本次新增 {len(new_jobs)} 个")
 
         save_to_json(jobs_data, company_dir)
-        analyze_and_push(jobs_data, new_jobs, company)
+
+        # 岗位表静默更新（数据层）：倒序写入，用户日常无需查看
+        if FEISHU_SPREADSHEET_TOKEN:
+            token = get_tenant_token()
+            if token:
+                jobs_sheet_id = get_or_create_sheet(token, FEISHU_SPREADSHEET_TOKEN, f"{name}-岗位")
+                if jobs_sheet_id:
+                    write_jobs_to_sheet(token, FEISHU_SPREADSHEET_TOKEN, jobs_sheet_id, jobs_data)
+
+        return jobs_data, new_jobs
 
     except Exception as e:
         print(f"[{name}] 处理出错: {e}")
+        return None
 
 
 # ---------------- 主流程 ----------------
@@ -845,14 +884,25 @@ def main():
         return
     print(f"本次监控 {len(companies)} 家公司: {'、'.join(c['name'] for c in companies)}")
 
+    # 以北京时间判断是否周一（云端 runner 为 UTC，统一换算）
+    beijing_now = datetime.utcnow() + timedelta(hours=8)
+    is_monday = beijing_now.weekday() == 0
+    print(f"北京时间: {beijing_now.strftime('%Y-%m-%d %H:%M')}（{'周一，将生成每周速览' if is_monday else '非周一，仅发送岗位速报'}）")
+
     # 仅 Moka 公司需要浏览器；全走接口（hotjob/beisen 等）时不启动
     moka_companies = [c for c in companies if c.get("platform", "moka") not in ("hotjob", "beisen")]
     driver = create_driver() if moka_companies else None
     if driver is None:
         print("所有公司均为接口爬取，无需启动浏览器")
+
+    results = []
     try:
         for company in companies:
-            process_company(driver, company)
+            r = process_company(driver, company)
+            if r:
+                results.append((company, r[0], r[1]))
+            else:
+                results.append((company, None, None))
     finally:
         if driver is not None:
             try:
@@ -860,6 +910,19 @@ def main():
             except Exception:
                 pass
             print("\n浏览器已关闭")
+
+    # 每天一条「岗位速报」（方案A合并单条）
+    if any(jobs is not None for _, jobs, _ in results):
+        report = build_daily_report(results, beijing_now)
+        send_feishu_message(report)
+
+    # 每周一额外发送「每周速览」（AI 分析周更）
+    if is_monday:
+        token = get_tenant_token()
+        if token and FEISHU_SPREADSHEET_TOKEN:
+            weekly = run_weekly_analysis(results, token, beijing_now)
+            if weekly:
+                send_feishu_message(weekly)
 
 
 if __name__ == "__main__":
