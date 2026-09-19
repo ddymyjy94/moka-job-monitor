@@ -6,7 +6,7 @@
       "platform": "moka",
       "url": "https://app.mokahr.com/social-recruitment/se/98712?sessionid=#/jobs",
       "cities": ["广州市", "武汉市"],
-      "priority": 5,
+      "priority": 6,
       "enabled": true
     },
     {
@@ -15,7 +15,7 @@
       "platform": "moka",
       "url": "https://app.mokahr.com/campus-recruitment/bosch/150946?sessionid=#/jobs",
       "cities": ["长沙市"],
-      "priority": 4,
+      "priority": 5,
       "enabled": true
     },
     {
@@ -43,6 +43,16 @@
       "platform": "beisen",
       "url": "https://irootech.zhiye.com/social/jobs",
       "cities": ["长沙市", "广州市", "北京市"],
+      "priority": 4,
+      "filters": { "Category": "1" },
+      "enabled": true
+    },
+    {
+      "id": "yanjin",
+      "name": "盐津铺子",
+      "platform": "beisen",
+      "url": "https://yanjinpuzi.zhiye.com",
+      "cities": ["长沙市"],
       "priority": 3,
       "filters": { "Category": "1" },
       "enabled": true
