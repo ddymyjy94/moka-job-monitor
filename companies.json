@@ -6,6 +6,7 @@
       "platform": "moka",
       "url": "https://app.mokahr.com/social-recruitment/se/98712?sessionid=#/jobs",
       "cities": ["广州市", "武汉市"],
+      "priority": 5,
       "enabled": true
     },
     {
@@ -14,6 +15,7 @@
       "platform": "moka",
       "url": "https://app.mokahr.com/campus-recruitment/bosch/150946?sessionid=#/jobs",
       "cities": ["长沙市"],
+      "priority": 4,
       "enabled": true
     },
     {
@@ -22,6 +24,7 @@
       "platform": "hotjob",
       "url": "https://wecruit.hotjob.cn/SU66f3c75a6202cc1a0cba3202/mc/position/society",
       "cities": ["长沙市"],
+      "priority": 2,
       "enabled": true
     },
     {
@@ -30,6 +33,7 @@
       "platform": "beisen",
       "url": "https://hnlshm4.zhiye.com/jobs",
       "cities": ["长沙市"],
+      "priority": 1,
       "filters": { "ClassificationTwo": ["9"], "Category": "1" },
       "enabled": true
     },
@@ -39,6 +43,7 @@
       "platform": "beisen",
       "url": "https://irootech.zhiye.com/social/jobs",
       "cities": ["长沙市", "广州市", "北京市"],
+      "priority": 3,
       "filters": { "Category": "1" },
       "enabled": true
     }

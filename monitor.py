@@ -80,6 +80,8 @@ def load_companies():
     companies = [c for c in config.get("companies", []) if c.get("enabled", True)]
     if not companies:
         print("companies.json 中没有启用的公司")
+    # priority 数字越小优先级越高（1 最高），未配置的排最后
+    companies.sort(key=lambda c: c.get("priority", 99))
     return companies
 
 
