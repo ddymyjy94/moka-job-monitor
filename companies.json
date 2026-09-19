@@ -30,7 +30,7 @@
       "platform": "beisen",
       "url": "https://hnlshm4.zhiye.com/jobs",
       "cities": ["长沙市"],
-      "filters": { "ClassificationTwo": ["9"] },
+      "filters": { "ClassificationTwo": ["9"], "Category": "1" },
       "enabled": true
     },
     {
@@ -39,6 +39,7 @@
       "platform": "beisen",
       "url": "https://irootech.zhiye.com/social/jobs",
       "cities": ["长沙市", "广州市", "北京市"],
+      "filters": { "Category": "1" },
       "enabled": true
     }
   ]

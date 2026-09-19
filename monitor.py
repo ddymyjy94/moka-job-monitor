@@ -324,7 +324,8 @@ def crawl_beisen_jobs(company):
     - 列表接口 PostDate 恒为 0001-01-01，真实发布日期用 ChangeDate（与页面
       GetSpecialJobAdList 的 PostDate 逐条一致，2026-09-11 抽样验证）
     - companies.json 里可用 "filters": {"ClassificationTwo": ["9"]} 传门户
-      侧的分类过滤（如鸣鸣很忙"总部招聘"），会合并进请求体
+      侧的分类过滤（如鸣鸣很忙"总部招聘"），会合并进请求体；
+      传 {"Category": "1"} 可让接口只返回社会招聘（树根互联已配）
     """
     name = company["name"]
     cities = company.get("cities", [])
@@ -374,6 +375,11 @@ def crawl_beisen_jobs(company):
             if it.get("Id") in seen_ids:
                 continue
             seen_ids.add(it.get("Id"))
+            # 北森列表接口混有校招/实习岗（如树根互联 146=社招76+校招39+实习31），
+            # 与 /social/jobs 社招链接语义不符，本地按 Category 兜底剔除
+            cat = (it.get("Category") or "").strip()
+            if cat and "社会" not in cat:
+                continue
             date_text = (it.get("ChangeDate") or "")[:10]
             try:
                 job_date = datetime.strptime(date_text, "%Y-%m-%d")
