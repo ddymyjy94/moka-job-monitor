@@ -6,7 +6,7 @@
       "platform": "moka",
       "url": "https://app.mokahr.com/social-recruitment/se/98712?sessionid=#/jobs",
       "cities": ["广州市", "武汉市"],
-      "priority": 7,
+      "priority": 8,
       "enabled": true
     },
     {
@@ -15,7 +15,17 @@
       "platform": "moka",
       "url": "https://app.mokahr.com/campus-recruitment/bosch/150946?sessionid=#/jobs",
       "cities": ["长沙市"],
+      "priority": 7,
+      "enabled": true
+    },
+    {
+      "id": "shein",
+      "name": "SHEIN",
+      "platform": "moka",
+      "url": "https://app.mokahr.com/social-recruitment/shein/2933#/jobs",
+      "cities": ["长沙市", "广州市", "深圳市", "北京市"],
       "priority": 6,
+      "city_click": false,
       "enabled": true
     },
     {

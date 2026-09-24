@@ -116,7 +116,7 @@ def wait_for_job_list(driver, timeout=25):
     while time.time() < deadline:
         if driver.find_elements(By.XPATH, "//*[contains(text(), '暂无匹配职位')]"):
             return "empty"
-        if driver.find_elements(By.XPATH, "//span[contains(@class, 'title-')]"):
+        if driver.find_elements(By.XPATH, "//span[contains(@class, 'title-')][normalize-space()]"):
             return "jobs"
         time.sleep(1)
     return "timeout"
@@ -164,7 +164,32 @@ def _click_city(driver, city):
         return False
 
 
-def crawl_jobs(driver, company):
+def _goto_next_moka_page(driver):
+    """点击列表分页的"下一页"按钮；按钮不存在或已禁用（末页）时返回 False。
+
+    Moka 列表用 sd-Pagination 组件，前进按钮 class 含 Pagination-forward，
+    末页带 disabled 属性。点击而非重新导航，以保留城市筛选等 SPA 状态。
+    """
+    try:
+        btns = driver.find_elements(
+            By.XPATH, "//button[contains(@class, 'Pagination-forward')]")
+        if not btns:
+            return False
+        if btns[0].get_attribute("disabled") is not None:
+            return False
+        driver.execute_script("arguments[0].click();", btns[0])
+        time.sleep(2.5)
+        return True
+    except Exception:
+        return False
+
+
+def _parse_moka_page(driver, company):
+    """解析当前页的岗位卡片（单页）。仅保留近一个月内发布的岗位。
+
+    返回 (jobs_data, card_count)：card_count 是本页实际找到的卡片数，
+    用于与"整页都是旧岗"区分（列表排序不保证时间倒序，不能据此早停）。
+    """
     name = company["name"]
     print(f"\n[{name}] 开始爬取岗位信息...")
     jobs_data = []
@@ -174,14 +199,14 @@ def crawl_jobs(driver, company):
     while time.time() < deadline:
         if driver.find_elements(By.XPATH, "//*[contains(text(), '暂无匹配职位')]"):
             print(f"[{name}] 无匹配岗位")
-            return []
-        job_cards = driver.find_elements(By.XPATH, "//span[contains(@class, 'title-')]")
+            return [], 0
+        job_cards = driver.find_elements(By.XPATH, "//span[contains(@class, 'title-')][normalize-space()]")
         if job_cards:
             break
         time.sleep(1)
     if not job_cards:
         print(f"[{name}] 未找到岗位卡片")
-        return []
+        return [], 0
 
     print(f"[{name}] 找到 {len(job_cards)} 个岗位")
 
@@ -237,14 +262,41 @@ def crawl_jobs(driver, company):
                 })
                 print("已保存（近一个月）")
             else:
+                # 注意：部分公司列表并非严格按发布时间倒序（如博世校招），
+                # 不能因连续旧岗而中断逐卡解析，否则会漏掉后面的新岗
                 print(f"跳过（超过一个月: {job_date.strftime('%Y-%m-%d')}）")
-                if i > 0:
-                    break
 
         except Exception as e:
             print(f"处理岗位 {i+1} 时出错: {e}")
 
-    return jobs_data
+    return jobs_data, len(job_cards)
+
+
+def crawl_jobs(driver, company):
+    """多页爬取：解析第 1 页后点"下一页"直到末页。
+
+    终止条件：末页按钮禁用/不存在、整页无卡片或页数达上限（60）。
+    列表排序不保证按发布时间倒序（博世/SHEIN 实测均有波动），
+    因此不能按"整页无新岗"早停，逐页全量解析后统一过滤。
+    """
+    name = company["name"]
+    all_jobs = []
+    seen = set()
+    page = 1
+    while page <= 60:
+        page_jobs, card_count = _parse_moka_page(driver, company)
+        fresh = [j for j in page_jobs
+                 if (j["岗位名称"], j["发布日期"], j["城市"]) not in seen]
+        for j in fresh:
+            seen.add((j["岗位名称"], j["发布日期"], j["城市"]))
+        all_jobs.extend(fresh)
+        print(f"[{name}] 第 {page} 页 {card_count} 张卡片，解析 {len(page_jobs)} 个（近一月，累计 {len(all_jobs)}）")
+        if card_count == 0:
+            break  # 真空页
+        if not _goto_next_moka_page(driver):
+            break
+        page += 1
+    return all_jobs
 
 
 def crawl_hotjob_jobs(company):
@@ -802,11 +854,14 @@ def crawl_moka_jobs(driver, company):
     filter_ok = not cities or _filter_confirmed(driver, cities, timeout=8)
 
     # 方案二：部分页面忽略 URL 参数且带参数时点选也失效（如施耐德社招），
-    # 必须用干净 URL 重新加载后再点选城市复选框
-    if cities and not filter_ok:
+    # 必须用干净 URL 强制刷新后再点选城市复选框。
+    # city_click=false 的公司（如 SHEIN：筛选面板组件不同，点选会破坏页面）
+    # 跳过点选，直接爬全量后依赖安全过滤兜底。
+    if cities and not filter_ok and company.get("city_click", True):
         clean_url = build_url(company["url"], [])
         print(f"URL 城市过滤未生效，改用干净 URL 重新加载后点选: {clean_url}")
         driver.get(clean_url)
+        driver.refresh()  # hash-only 变更不会触发真实重载，强制刷新
         time.sleep(3)
         state = wait_for_job_list(driver)
         if state == "empty":
@@ -823,6 +878,8 @@ def crawl_moka_jobs(driver, company):
             time.sleep(1)
         if not _filter_confirmed(driver, cities, timeout=10):
             print("警告：未能确认城市筛选状态，将依赖安全过滤兜底")
+    elif cities and not filter_ok:
+        print("URL 城市过滤未生效且配置跳过点选，爬取全量后依赖安全过滤兜底")
 
     time.sleep(2)
     jobs_data = crawl_jobs(driver, company)
