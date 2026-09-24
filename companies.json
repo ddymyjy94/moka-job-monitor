@@ -26,6 +26,7 @@
       "cities": ["长沙市", "广州市", "深圳市", "北京市"],
       "priority": 6,
       "city_click": false,
+      "filters": { "exclude_name_keywords": ["税", "Tax", "法务", "Legal", "HR", "人力资源", "人事"] },
       "enabled": true
     },
     {

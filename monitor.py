@@ -892,6 +892,19 @@ def crawl_moka_jobs(driver, company):
             print(f"[{name}] 安全过滤：剔除 {dropped} 个不在监控城市范围内的岗位")
         jobs_data = filtered
 
+    # 关键词排除：按岗位名剔除不关注的岗位（filters.exclude_name_keywords，
+    # 如 SHEIN 的税务/法务/HR；匹配不区分大小写）
+    excl = [k for k in ((company.get("filters") or {}).get("exclude_name_keywords") or []) if k]
+    if excl and jobs_data:
+        def _excluded(j):
+            nm = (j.get("岗位名称") or "").lower()
+            return any(k.lower() in nm for k in excl)
+        kept = [j for j in jobs_data if not _excluded(j)]
+        dropped = len(jobs_data) - len(kept)
+        if dropped:
+            print(f"[{name}] 关键词排除：剔除 {dropped} 个岗位（{', '.join(excl)}）")
+        jobs_data = kept
+
     if not jobs_data:
         print(f"[{name}] 无近一个月内发布的岗位，跳过飞书同步")
         return None
