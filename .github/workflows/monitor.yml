@@ -2,8 +2,15 @@ name: 招聘岗位监控
 
 on:
   schedule:
-    - cron: '0 1 * * *'   # UTC 1:00 = 北京时间每天 9:00（GitHub 定时可能有几分钟延迟）
-  workflow_dispatch:       # 支持手动触发，用于测试
+    - cron: '17 22 * * *'   # 主跑：UTC 22:17 = 北京 06:17（避开整点高峰——GitHub 对 01:00 整点定时已出现 4-5 小时延迟）
+    - cron: '17 0 * * *'    # 兜底跑：UTC 00:17 = 北京 08:17；当日（北京时间）已跑过则 monitor.py 自动静默跳过
+  workflow_dispatch:
+    inputs:
+      force:
+        description: '忽略当日已跑标记，强制运行'
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: write          # 允许回写岗位快照到仓库
@@ -33,6 +40,7 @@ jobs:
           AI_API_URL: ${{ secrets.AI_API_URL }}
           AI_API_KEY: ${{ secrets.AI_API_KEY }}
           AI_MODEL: ${{ secrets.AI_MODEL }}
+          FORCE_RUN: ${{ github.event.inputs.force == 'true' && '1' || '0' }}
         run: python monitor.py
 
       - name: 回写岗位快照

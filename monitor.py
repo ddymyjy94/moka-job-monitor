@@ -15,7 +15,7 @@
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.by import By
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from urllib.parse import quote, urlparse
 import re
 import time
@@ -36,6 +36,15 @@ else:
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(BASE_DIR, "companies.json")
 OUTPUT_DIR = os.path.join(BASE_DIR, "jobs_data")
+MARKER_FILE = os.path.join(OUTPUT_DIR, "_last_run_date.txt")
+
+
+def beijing_now():
+    """北京时间（UTC+8）。云端 runner 是 UTC、本地是北京，
+    凡涉及"哪一天"的日程语义（周一判定、日报日期头、当日去重标记）统一以此为准。
+    """
+    return datetime.now(timezone.utc) + timedelta(hours=8)
+
 DRIVER_PATH = os.path.join(BASE_DIR, "edgedriver_win64", "msedgedriver.exe")
 EDGE_BINARY_PATH = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
 
@@ -816,7 +825,7 @@ def update_jobs_sheet_only(jobs_data, company):
 
 def send_daily_digest(results):
     """简易日报：单条消息，按优先级只列有新增岗位的公司；全无新增时一句话收尾。"""
-    date_str = datetime.now().strftime("%m-%d")
+    date_str = beijing_now().strftime("%m-%d")
     segments = []
     for r in results:
         new_jobs = r["new_jobs"]
@@ -955,13 +964,25 @@ def process_company(driver, company, is_monday):
 # ---------------- 主流程 ----------------
 
 def main():
+    # 当日（北京时间）已运行过则跳过：主跑 cron 正常时，兜底 cron 触发直接静默退出
+    beijing_today = beijing_now().strftime("%Y-%m-%d")
+    if os.getenv("FORCE_RUN") != "1" and os.path.exists(MARKER_FILE):
+        try:
+            with open(MARKER_FILE, "r", encoding="utf-8") as f:
+                if f.read().strip() == beijing_today:
+                    print(f"北京时间 {beijing_today} 已运行过，跳过本次触发")
+                    return
+        except Exception as e:
+            print(f"读取运行标记失败（继续正常流程）: {e}")
+
     companies = load_companies()
     if not companies:
         return
     print(f"本次监控 {len(companies)} 家公司: {'、'.join(c['name'] for c in companies)}")
 
     # 周一推全量周报（AI 分析+每公司一条）；周二至周日推简易日报（仅新增岗位，不调 AI）
-    is_monday = datetime.now().weekday() == 0
+    # 按北京时间判定：主跑在 UTC 22:17（北京时间周一早 6 点），runner 的 UTC 日期还差一天
+    is_monday = beijing_now().weekday() == 0
     print("今天是周一，推送全量周报" if is_monday else "非周一，推送简易日报（仅新增岗位）")
 
     # 仅 Moka 公司需要浏览器；全走接口（hotjob/beisen 等）时不启动
@@ -977,6 +998,12 @@ def main():
                 results.append(r)
         if not is_monday and results:
             send_daily_digest(results)
+
+        # 写入运行标记（北京时间日期，随快照一起回写仓库），供兜底触发判重
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        with open(MARKER_FILE, "w", encoding="utf-8") as f:
+            f.write(beijing_today)
+        print(f"运行标记已写入: {MARKER_FILE} = {beijing_today}")
     finally:
         if driver is not None:
             try:
