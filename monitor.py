@@ -945,6 +945,9 @@ def process_company(driver, company, is_monday):
             if jobs_data is None:
                 return {"name": name, "new_jobs": []}
 
+        # 按发布日期由近及远排序：列表页/API 返回顺序不保证时间序（Moka 每次运行还会波动），
+        # 表格写入、周报全部岗位列表、日报新增列表均沿用此顺序
+        jobs_data.sort(key=lambda j: j.get("发布日期") or "", reverse=True)
         previous_jobs = load_previous_jobs(company_dir)
         new_jobs = diff_new_jobs(jobs_data, previous_jobs)
         print(f"\n[{name}] 共 {len(jobs_data)} 个岗位，本次新增 {len(new_jobs)} 个")
